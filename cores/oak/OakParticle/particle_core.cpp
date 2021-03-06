@@ -328,6 +328,8 @@ int blocking_send(const unsigned char *buf, int length)
 
   #endif
   int byte_count = pClient.write(buf, length);
+  yield();
+
   #ifdef DEBUG_SETUP
     Serial.println(byte_count);
     Serial.println((millis()-start)/1000);
@@ -364,6 +366,9 @@ int blocking_receive(unsigned char *buf, int length)
 {
   if(!spark_connected())
     return -1;
+
+  yield();
+
   #ifdef DEBUG_SETUP
   Serial.println("BLRECV");
 
@@ -1063,7 +1068,7 @@ int description(unsigned char *buf, unsigned char token,
       sprintf(number_buffer,"%d",deviceConfig->system_version);
       appender.append(number_buffer);
       appender.append(",\"d\":[]},{\"s\":1040368,\"l\":\"m\",\"vc\":30,\"vv\":30,\"u\":\"0\",\"f\":\"u\",\"n\":\"1\",\"v\":1,\"d\":[{\"f\":\"s\",\"n\":\"1\",\"v\":");
-      sprintf(number_buffer,"%d",OAK_SYSTEM_VERSION_INTEGER);
+      sprintf(number_buffer,"%d",deviceConfig->system_version);
       appender.append(number_buffer);
       appender.append(",\"_\":\"\"}]}]");
     }
@@ -1717,12 +1722,12 @@ bool handle_update_begin(msg& message)
             #ifdef DEBUG_SETUP
               Serial.println("F4");
             #endif
-            if (deviceConfig->system_version < OAK_SYSTEM_VERSION_INTEGER || deviceConfig->system_update_pending > 0){
+            /*if (deviceConfig->system_version < OAK_SYSTEM_VERSION_INTEGER || deviceConfig->system_update_pending > 0){
               if(deviceConfig->system_update_pending == 0){
                 deviceConfig->system_update_pending = 1;
                 writeDeviceConfig();
               }
-            }
+            }*/
               //else if(deviceConfig->system_update_pending == 1){
               //  set_oakboot_defaults(0);
               //  deviceConfig->system_update_pending = 2;
@@ -2392,7 +2397,7 @@ bool event_loop(CoAPMessageType::Enum message_type, uint32_t timeout)
             return false;
         if (msgtype==message_type)
             return true;
-        // todo - ideally need a delay here
+        yield();
     }
     while ((millis()-start) < timeout);
     return false;
@@ -2402,7 +2407,14 @@ bool event_loop(CoAPMessageType::Enum message_type, uint32_t timeout)
 bool event_loop()
   {
     CoAPMessageType::Enum message;
-    return event_loop(message);
+    bool res;
+    uint32_t start = millis();
+    do {
+      res = event_loop(message);
+      yield();
+    }while(res && pClient.available() >= 2 && (millis()-start) < 20);
+
+    return res;
   }
 
 
@@ -2565,6 +2577,14 @@ void remove_event_handlers(const char* event_name)
 
 bool particleConnect(){
   uint8_t max_connect_tries = 3;
+  // Generate a random local port number, to avoid issues with
+  // previous connections left hanging on the server
+  // register used is apparently a RNG, see:
+  // http://esp8266-re.foogod.com/wiki/Random_Number_Generator
+  uint16_t local_port = ESP8266_DREG(0x20E44);
+  // Avoid using low port numbers, 4k is probably overkill, but it doesn't matter.
+  if(local_port < 4096) local_port += 4096;
+    pClient.setLocalPortStart((uint16_t)local_port);
   if(deviceConfig->server_address_type == 1){
     while(!pClient.connect(deviceConfig->server_address_domain,SPARK_SERVER_PORT) && max_connect_tries > 0){
       max_connect_tries--;
@@ -2719,9 +2739,11 @@ bool particle_handshake(){
   spark_send_event("spark/hardware/ota_chunk_size", buf, 60, PRIVATE, NULL);
 
   ///if we want to be able to get a system update we need to send that we are in safe more right now
+  /*
   if (deviceConfig->system_version < OAK_SYSTEM_VERSION_INTEGER || deviceConfig->system_update_pending > 0){
     spark_send_event("spark/device/safemode" "", "", 60, PRIVATE, NULL);
   }
+  */
 
 /*
   #if defined(SPARK_SUBSYSTEM_EVENT_NAME)
@@ -2981,6 +3003,7 @@ bool spark_internal_connect(){
   Serial.println("SHAKE");
 
 #endif
+      pClient.stop();
       spark_connect_pending = false;
       return false;
     }
